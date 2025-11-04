@@ -48,6 +48,10 @@ def write_link_urdf(joints_dict, repo, links_xyz_dict, file_name, inertial_dict)
         # others
         for joint in joints_dict:
             name = joints_dict[joint]['child']
+            # If the link has already been written (appears as child in another joint), skip
+            # to keep the link origin determined by the primary (spanning-tree) joint.
+            if name in links_xyz_dict:
+                continue
             center_of_mass = \
                 [ i-j for i, j in zip(inertial_dict[name]['center_of_mass'], joints_dict[joint]['xyz'])]
             link = Link.Link(name=name, xyz=joints_dict[joint]['xyz'],\
@@ -122,7 +126,7 @@ def write_urdf(joints_dict, links_xyz_dict, inertial_dict, package_name, robot_n
     try: os.mkdir(save_dir + '/urdf')
     except: pass 
 
-    file_name = save_dir + '/urdf/' + robot_name + '.xacro'  # the name of urdf file
+    file_name = save_dir + '/urdf/' + robot_name + '.urdf'  # the name of urdf file
     repo = package_name + '/meshes/'  # the repository of binary stl files
     with open(file_name, mode='w') as f:
         f.write('<?xml version="1.0" ?>\n')
