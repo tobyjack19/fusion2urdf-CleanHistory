@@ -29,26 +29,77 @@ def copy_occs(root):
         # This support even when a component has some occses. 
 
         new_occs = allOccs.addNewComponent(transform)  # this create new occs
+        orig_name = occs.component.name
         if occs.component.name == 'base_link':
+            # rename original to a temporary name and give the new component the base name
             occs.component.name = 'old_component'
             new_occs.component.name = 'base_link'
         else:
             new_occs.component.name = re.sub('[ :()]', '_', occs.name)
+        # After addNewComponent the newly created occurrence is at the end
         new_occs = allOccs.item((allOccs.count-1))
         for i in range(bodies.count):
             body = bodies.item(i)
             body.copyToComponent(new_occs)
+        return new_occs, orig_name
     
     allOccs = root.occurrences
     oldOccs = []
+    copied_info = []
     coppy_list = [occs for occs in allOccs]
     for occs in coppy_list:
         if occs.bRepBodies.count > 0:
-            copy_body(allOccs, occs)
-            oldOccs.append(occs)
+            try:
+                new_occ, orig_name = copy_body(allOccs, occs)
+                oldOccs.append(occs)
+                copied_info.append({'new_occ': new_occ, 'orig_occ': occs, 'orig_name': orig_name})
+            except Exception as e:
+                print('Failed copying occ {}: {}'.format(occs.name, e))
 
+    # mark originals as temporarily renamed so new components can take their names
     for occs in oldOccs:
-        occs.component.name = 'old_component'
+        try:
+            occs.component.name = 'old_component'
+        except Exception:
+            pass
+
+    return copied_info
+
+
+def delete_copied_components(root, copied_info):
+    """Delete components that were created by copy_occs and restore original names.
+
+    Parameters
+    ----------
+    root: adsk.fusion.Component
+        root component
+    copied_info: list
+        list returned by copy_occs containing dicts with keys 'new_occ', 'orig_occ', 'orig_name'
+    """
+    allOccs = root.occurrences
+    for info in copied_info:
+        try:
+            new_occ = info.get('new_occ')
+            orig_occ = info.get('orig_occ')
+            orig_name = info.get('orig_name')
+            # delete the newly created occurrence (and its component)
+            try:
+                # occurrence objects support deleteMe()
+                new_occ.deleteMe()
+            except Exception:
+                # fallback: try deleting the component itself
+                try:
+                    comp = new_occ.component
+                    comp.deleteMe()
+                except Exception:
+                    pass
+            # restore the original component name
+            try:
+                orig_occ.component.name = orig_name
+            except Exception:
+                pass
+        except Exception as e:
+            print('Failed to delete copied component: {}'.format(e))
 
 
 def export_stl(design, save_dir, components):  
