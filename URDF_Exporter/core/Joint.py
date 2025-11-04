@@ -122,7 +122,9 @@ def make_joints_dict(root, msg):
     'fixed', 'revolute', 'prismatic', 'Cylinderical',
     'PinSlot', 'Planner', 'Ball']  # these are the names in urdf
 
+    # temporary storage while we build the connectivity graph and compute positions
     joints_dict = {}
+    temp = {}  # joint_name -> intermediate data including occurrence refs
     
     for joint in root.joints:
         joint_dict = {}
@@ -169,11 +171,21 @@ def make_joints_dict(root, msg):
         elif joint_type == 'fixed':
             pass
         
+        # store the two connected link names (sanitized). We'll orient parent/child
+        # later by traversing the kinematic tree starting from 'base_link'.
         if joint.occurrenceTwo.component.name == 'base_link':
-            joint_dict['parent'] = 'base_link'
+            comp2_name = 'base_link'
         else:
-            joint_dict['parent'] = re.sub('[ :()]', '_', joint.occurrenceTwo.name)
-        joint_dict['child'] = re.sub('[ :()]', '_', joint.occurrenceOne.name)
+            comp2_name = re.sub('[ :()]', '_', joint.occurrenceTwo.name)
+        comp1_name = re.sub('[ :()]', '_', joint.occurrenceOne.name)
+        joint_dict['comp1'] = comp1_name
+        joint_dict['comp2'] = comp2_name
+
+        # keep references to occurrences and joint object to compute joint world position
+        temp[joint.name] = {
+            'joint_obj': joint,
+            'data': joint_dict
+        }
         
         
         #There seem to be a problem with geometryOrOriginTwo. To calcualte the correct orogin of the generated stl files following approach was used.
@@ -227,5 +239,183 @@ def make_joints_dict(root, msg):
                 msg = joint.name + " doesn't have joint origin. Please set it and run again."
                 break
         
-        joints_dict[joint.name] = joint_dict
+        # don't insert into final dict yet
+
+    # Build adjacency list: node -> list of (neighbor, joint_name)
+    adj = {}
+    for jname, info in temp.items():
+        a = info['data']['comp1']
+        b = info['data']['comp2']
+        adj.setdefault(a, []).append((b, jname))
+        adj.setdefault(b, []).append((a, jname))
+
+    # BFS from base_link to orient the tree (parent -> child)
+    from collections import deque
+    root_node = 'base_link'
+    visited = set()
+    q = deque([root_node])
+    visited.add(root_node)
+    # track BFS level (distance) from base_link for each node
+    levels = {root_node: 0}
+
+    # helper to transform a local point by an occurrence transform array
+    def transform_point(transform_array, local_point):
+        # transform_array is 16-element array as returned by .asArray()
+        ex = [transform_array[0], transform_array[4], transform_array[8]]
+        ey = [transform_array[1], transform_array[5], transform_array[9]]
+        ez = [transform_array[2], transform_array[6], transform_array[10]]
+        oo = [transform_array[3], transform_array[7], transform_array[11]]
+        res = [0, 0, 0]
+        for i in range(3):
+            res[i] = local_point[0]*ex[i] + local_point[1]*ey[i] + local_point[2]*ez[i] + oo[i]
+        return res
+
+    # compute joint world positions and assign oriented parent/child
+    oriented = {}
+    while q:
+        node = q.popleft()
+        for neigh, jname in adj.get(node, []):
+            if neigh in visited:
+                continue
+            # orient joint from node (parent) to neigh (child)
+            visited.add(neigh)
+            q.append(neigh)
+            levels[neigh] = levels.get(node, 0) + 1
+
+            info = temp[jname]
+            joint_obj = info['joint_obj']
+            jdata = info['data']
+
+            parent_name = node
+            child_name = neigh
+
+            # compute joint world position robustly using available geometry/origin
+            world_pos = None
+            # try occurrenceOne first
+            try:
+                if hasattr(joint_obj.geometryOrOriginOne, 'origin'):
+                    local = joint_obj.geometryOrOriginOne.origin.asArray()
+                else:
+                    local = joint_obj.geometryOrOriginOne.geometry.origin.asArray()
+                M1 = joint_obj.occurrenceOne.transform.asArray()
+                world_pos = transform_point(M1, local)
+            except Exception:
+                world_pos = None
+
+            # try occurrenceTwo if occurrenceOne didn't work or positions mismatch
+            try:
+                if hasattr(joint_obj.geometryOrOriginTwo, 'origin'):
+                    local2 = joint_obj.geometryOrOriginTwo.origin.asArray()
+                else:
+                    local2 = joint_obj.geometryOrOriginTwo.geometry.origin.asArray()
+                M2 = joint_obj.occurrenceTwo.transform.asArray()
+                world_pos2 = transform_point(M2, local2)
+                if world_pos is None:
+                    world_pos = world_pos2
+                else:
+                    # if both exist but disagree, prefer the one closer to parent occurrence
+                    # (choose the one that is numerically closer to parent's transform translation)
+                    try:
+                        parent_trans = joint_obj.occurrenceTwo.transform.translation.asArray() if parent_name == jdata['comp2'] else joint_obj.occurrenceOne.transform.translation.asArray()
+                        # compute distances
+                        d1 = sum([(a-b)**2 for a,b in zip(world_pos, parent_trans)])
+                        d2 = sum([(a-b)**2 for a,b in zip(world_pos2, parent_trans)])
+                        world_pos = world_pos if d1 <= d2 else world_pos2
+                    except Exception:
+                        # fallback: keep world_pos (occurrenceOne)
+                        pass
+            except Exception:
+                pass
+
+            if world_pos is None:
+                # fallback: try joint geometryOrOriginTwo untranslated (as original code attempted)
+                try:
+                    if type(joint_obj.geometryOrOriginTwo)==adsk.fusion.JointOrigin:
+                        data = joint_obj.geometryOrOriginTwo.geometry.origin.asArray()
+                    else:
+                        data = joint_obj.geometryOrOriginTwo.origin.asArray()
+                    world_pos = data
+                except Exception:
+                    msg = joint_obj.name + " doesn't have joint origin. Please set it and run again."
+                    return {}, msg
+
+            # convert to meters
+            world_pos_m = [round(i / 100.0, 6) for i in world_pos]
+
+            # finalize joint dict
+            final = {
+                'type': jdata['type'],
+                'axis': jdata.get('axis', [0,0,0]),
+                'upper_limit': jdata.get('upper_limit', 0.0),
+                'lower_limit': jdata.get('lower_limit', 0.0),
+                'parent': parent_name,
+                'child': child_name,
+                'xyz': world_pos_m
+            }
+            joints_dict[jname] = final
+
+    # For any joints not reached by BFS (disconnected components), fall back to original pairing
+    for jname, info in temp.items():
+        if jname in joints_dict:
+            continue
+        jdata = info['data']
+        joint_obj = info['joint_obj']
+        # default parent/child as original (comp2 -> comp1)
+        try:
+            comp1 = jdata['comp1']
+            comp2 = jdata['comp2']
+            # choose parent as the node closer to base_link (smaller level)
+            if comp1 in levels and comp2 in levels:
+                if levels[comp1] <= levels[comp2]:
+                    parent_name = comp1
+                    child_name = comp2
+                else:
+                    parent_name = comp2
+                    child_name = comp1
+            elif comp1 in levels:
+                parent_name = comp1
+                child_name = comp2
+            elif comp2 in levels:
+                parent_name = comp2
+                child_name = comp1
+            else:
+                # neither endpoint reached in BFS; fall back to original assumption
+                parent_name = comp2
+                child_name = comp1
+            # try to compute world pos similar to above
+            world_pos = None
+            try:
+                if hasattr(joint_obj.geometryOrOriginTwo, 'origin'):
+                    local = joint_obj.geometryOrOriginTwo.origin.asArray()
+                else:
+                    local = joint_obj.geometryOrOriginTwo.geometry.origin.asArray()
+                M2 = joint_obj.occurrenceTwo.transform.asArray()
+                world_pos = transform_point(M2, local)
+            except Exception:
+                pass
+            if world_pos is None:
+                try:
+                    if type(joint_obj.geometryOrOriginTwo)==adsk.fusion.JointOrigin:
+                        data = joint_obj.geometryOrOriginTwo.geometry.origin.asArray()
+                    else:
+                        data = joint_obj.geometryOrOriginTwo.origin.asArray()
+                    world_pos = data
+                except Exception:
+                    msg = joint_obj.name + " doesn't have joint origin. Please set it and run again."
+                    return {}, msg
+            world_pos_m = [round(i / 100.0, 6) for i in world_pos]
+            final = {
+                'type': jdata['type'],
+                'axis': jdata.get('axis', [0,0,0]),
+                'upper_limit': jdata.get('upper_limit', 0.0),
+                'lower_limit': jdata.get('lower_limit', 0.0),
+                'parent': parent_name,
+                'child': child_name,
+                'xyz': world_pos_m
+            }
+            joints_dict[jname] = final
+        except Exception:
+            # ignore and continue
+            pass
+
     return joints_dict, msg
