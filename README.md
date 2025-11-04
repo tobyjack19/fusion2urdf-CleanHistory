@@ -5,7 +5,7 @@ This is a **fork** of the original [syuntoku14/fusion2urdf](https://github.com/s
 Changes made are as follows:
  - Output file as URDF instead of XACRO
  - Solve issue where components which have >1 joint with respect to which they are the "child" component, are wrongly transformed
- - keeps the fusion design history clean (cleans up after itself)
+ - Keeps the fusion design history clean (cleans up after itself)
 
 -BELOW THIS THE README IS SAME AS ORIGINAL-
 
