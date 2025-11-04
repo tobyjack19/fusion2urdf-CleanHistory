@@ -1,6 +1,13 @@
 # URDF Exporter for Fusion 360
 
-This is a **fork** of the original [syuntoku14/fusion2urdf](https://github.com/syuntoku14/fusion2urdf) repository. 
+This is a **fork** of the original [syuntoku14/fusion2urdf](https://github.com/syuntoku14/fusion2urdf) repository. Forked as of 04/11/2025.
+
+Changes made are as follows:
+ - Output file as URDF instead of XACRO
+ - Solve issue where components which have >1 joint with respect to which they are the "child" component, are wrongly transformed
+ - keeps the fusion design history clean (cleans up after itself)
+
+-BELOW THIS THE README IS SAME AS ORIGINAL-
 
 ## **Changes Made**
 - **Python 3.12 Compatibility**: Replaced the deprecated `distutils.dir_util` with `shutil` for directory operations, ensuring compatibility with **Python 3.12** used by Fusion 360.
@@ -11,8 +18,6 @@ This is a **fork** of the original [syuntoku14/fusion2urdf](https://github.com/s
 - The script is updated for use with **Python 3.12**, as Fusion 360 no longer supports `distutils` in versions above Python 3.10.
 
 ---
-
-
 
 ## Updated!!!
 * 2021/01/09: Fix xyz calculation. 
