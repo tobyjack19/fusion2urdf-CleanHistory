@@ -2,7 +2,7 @@
 
 This is a **fork** of the original [syuntoku14/fusion2urdf](https://github.com/syuntoku14/fusion2urdf) repository. Forked as of 04/11/2025.
 
-# I am still actively working on this so apologies for any issues that may crop up
+# I am still actively working on this so apologies for any issues that may crop up (there are a couple)
 
 Changes made are as follows:
  - Output file as URDF instead of XACRO
